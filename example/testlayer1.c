@@ -91,6 +91,8 @@ void usage(void) {
 	printf("  --b1, --b1=<n>     enable B channel stream with <n> packet sz\n");
 	printf("  --b2, --b2=<n>     enable B channel stream with <n> packet sz\n");
 	printf("  --te               use TA in TE mode (default is NT)\n");
+	printf("  --up               use Up0 mode (default is S0)\n");
+	printf("  --syncsrc=<n>      use interface <n> as synchronization source\n");
 	printf("  --testloop=<x>     set up hardware testloops, 7 activates B1+B2+D:\n");
 	printf("                            0: deactivate testloops\n");
 	printf("                            1: activate B1 testloop rx -> line tx\n");
@@ -175,6 +177,7 @@ typedef struct _devinfo {
 
 	channel_data_t ch[4]; // data channel info for D,B2,B2,(E)
 	unsigned char channel_mask; // enable channel streams
+	unsigned char sync_src;
 } devinfo_t;
 
 
@@ -183,6 +186,8 @@ typedef struct _devinfo {
 static int debug = 0;
 static int usleep_val = 200;
 static int te_mode = 0;
+static int up_mode = 0;
+static int sync_src = 0;
 static int stop = 0; // stop after x seconds
 static int exit_app = 0; // stop after x seconds
 static unsigned char payload = 1;
@@ -771,14 +776,14 @@ connect_layer1_d(devinfo_t *di) {
 	close(sk);
 
 	if (te_mode) {
-		mISDN.layerid[CHAN_D] = socket(PF_ISDN, SOCK_DGRAM, ISDN_P_TE_S0);
+		mISDN.layerid[CHAN_D] = socket(PF_ISDN, SOCK_DGRAM, (up_mode) ? ISDN_P_TE_UP0 : ISDN_P_TE_S0);
 	} else {
-		mISDN.layerid[CHAN_D] = socket(PF_ISDN, SOCK_DGRAM, ISDN_P_NT_S0);
+		mISDN.layerid[CHAN_D] = socket(PF_ISDN, SOCK_DGRAM, (up_mode) ? ISDN_P_NT_UP0 : ISDN_P_NT_S0);
 	}
 	if (mISDN.layerid[CHAN_D] < 1) {
 		fprintf(stderr, "could not open socket '%s': %s\n",
 			strerror(errno),
-			(te_mode) ? "ISDN_P_TE_S0" : "ISDN_P_NT_S0");
+			(te_mode) ? ((up_mode) ? "ISDN_P_TE_UP0" : "ISDN_P_TE_S0") : ((up_mode) ? "ISDN_P_NT_UP0" : "ISDN_P_NT_S0"));
 		return 5;
 	}
 
@@ -818,6 +823,21 @@ set_hw_loop(devinfo_t *di)
 	return ret;
 }
 
+int
+set_sync_src(devinfo_t *di)
+{
+	int ret;
+	struct mISDN_ctrl_req creq;
+
+	creq.op = MISDN_CTRL_SYNC;
+	creq.sync = di->sync_src;
+	ret = ioctl(mISDN.layerid[CHAN_D], IMCTRLREQ, &creq);
+	if (ret < 0) {
+		fprintf(stdout, "set_sync_src ioctl error %s\n", strerror(errno));
+	}
+	return ret;
+}
+
 
 int main(int argc, char *argv[]) {
 	int c, err;
@@ -832,9 +852,11 @@ int main(int argc, char *argv[]) {
 		{"btrans", no_argument, &btrans, 1},
 		{"stop", required_argument, 0, 't'},
 		{"te", no_argument, &te_mode, 1},
+		{"up", no_argument, &up_mode, 1},
 		{"d", optional_argument, 0, 'x'},
 		{"b1", optional_argument, 0, 'y'},
 		{"b2", optional_argument, 0, 'z'},
+		{"syncsrc", optional_argument, 0, 'a'},
 		{"testloop", required_argument, 0, 'l'},
 		{"help", no_argument, 0, 'h'},
 	};
@@ -895,6 +917,10 @@ int main(int argc, char *argv[]) {
 					mISDN.ch[CHAN_B2].tx_size = atoi(optarg);
 				}
 				break;
+			case 'a':
+				mISDN.sync_src = atoi(optarg) & 0x7;
+				sync_src = 1;
+				break;
 			case 'l':
 				mISDN.channel_mask = atoi(optarg) & 0x7;
 				testloop = 1;
@@ -942,6 +968,9 @@ int main(int argc, char *argv[]) {
 
 	if (testloop) {
 		set_hw_loop(&mISDN);
+		if (sync_src) {
+			set_sync_src(&mISDN);
+		}
 	} else {
 		set_signals();
 		err = do_setup(&mISDN);
